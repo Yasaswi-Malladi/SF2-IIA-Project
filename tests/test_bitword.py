@@ -45,12 +45,12 @@ def test_array():
 
 
 def test_zeros():
-    x = np.zeros(3, dtype=bitword)
+    x = np.zeros(3, dtype=bitword.dtype)
     assert x.dtype == bitword.dtype
 
 
 def test_verify():
-    x = np.zeros(2, dtype=bitword)
+    x = np.zeros(2, dtype=bitword.dtype)
     x['val'][0] = 0b101
     x['bits'][0] = 2  # too small!
     with pytest.raises(ValueError) as exc_info:
