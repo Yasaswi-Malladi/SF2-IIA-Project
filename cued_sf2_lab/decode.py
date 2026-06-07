@@ -7,7 +7,10 @@ from scipy.ndimage import gaussian_filter
 from .common import HeaderType
 
 def deadzone_dequant(xq, step):
-    return xq * step
+    # Reconstruct to the center of the quantization bin to minimize error!
+    # For a deadzone quantizer floor(abs(x)/step), a value xq=1 covers [step, 2*step).
+    # The midpoint is (xq + 0.5) * step. np.sign(0) handles the zero case perfectly.
+    return xq * step + np.sign(xq) * (step * 0.5)
 
 def decode(vlc: np.ndarray, header: HeaderType) -> np.ndarray:
     """
