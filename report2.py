@@ -204,10 +204,27 @@ for the Laplacian Pyramid to find the appropriate step- size ratios). Hence dete
     plt.subplots_adjust(wspace=0, hspace=0, left=0, right=1, top=1, bottom=0)
     plt.show()
 
-dwt_const_mse(lighthouse)
+# dwt_const_mse(lighthouse)
 
-# im = Image(lighthouse)
-# im.DWT(l=3)
+def lighthouse_histogram():
+
+    im = Image(lighthouse)
+    im.plot()
+    im.pyramid([0.25, 0.5, 0.25], 4)
+    first_highpass = Image(im._pyramid[0])
+    first_highpass.quantise(2, 10)
+    im._pyramid[0] = first_highpass.image
+    first_highpass.histogram()
+    im.ipyramid([0.25, 0.5, 0.25])
+    im.plot()
+
+    
+# lighthouse_histogram()
+
+im = Image(lighthouse)
+a = im.DWT(l=3)
+DWT.MSE()
+
 # M = np.array(Image.MSE_dwt(h1, h2, g1, g2, l=3))
 # print(M)
 # im.quantise_dwt(M*0.1, l=3)
