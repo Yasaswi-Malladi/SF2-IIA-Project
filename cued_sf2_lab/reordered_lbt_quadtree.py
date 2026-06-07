@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.io import loadmat
+from scipy.ndimage import gaussian_filter
 import sys
 import os
 
@@ -34,7 +35,7 @@ from cued_sf2_lab.jpeg import jpegenc, jpegdec
 # and compress them into a single node!
 # -------------------------------------------------------------------------
 
-TOTAL_TARGET_BITS = 40960  # 5.0 KB
+TOTAL_TARGET_BITS = 40000  # 40000 bits
 
 def rms_error(X, Y):
     return np.std(X - Y)
@@ -245,7 +246,7 @@ def lbt_huffman(X, target_bits, N=8):
 # Main Execution Loop
 # -------------------------------------------------------------------------
 def run_experiment():
-    images = ["lighthouse.mat", "bridge.mat", "flamingo.mat"]
+    images = ["lighthouse.mat", "bridge.mat", "flamingo.mat", "camera.mat"]
     
     for img_name in images:
         print(f"\nProcessing {img_name}...")
@@ -270,7 +271,81 @@ def run_experiment():
         Yrq, qstep, bits_qt = encode_reordered_lbt_qt(X_orig, TOTAL_TARGET_BITS)
         Z_qt = decode_reordered_lbt_qt(Yrq, qstep)
         
-        # --- Plotting ---
+        if img_name == "lighthouse.mat":
+            # Recreate intermediate steps for visualization
+            s = (1 + 5**0.5) / 2
+            Pf, Pr = pot_ii(8, s)
+            t = np.s_[4:-4]
+            
+            # Encoding Steps
+            Xp = X_orig.copy()
+            Xp[t, :] = colxfm(Xp[t, :], Pf)
+            Xp[:, t] = colxfm(Xp[:, t].T, Pf).T
+            C = dct_ii(8)
+            Y = colxfm(colxfm(Xp, C).T, C).T
+            Yr = regroup(Y, 8)
+            
+            # Decoding Steps
+            Yr_hat = deadzone_dequant(Yrq, qstep)
+            Y_hat = regroup(Yr_hat, 256//8) 
+            Xp_hat = colxfm(colxfm(Y_hat.T, C.T).T, C.T)
+            
+            # Visualise Steps
+            import matplotlib.patches as patches
+            fig_steps, axes_steps = plt.subplots(2, 6, figsize=(24, 8))
+            fig_steps.suptitle("LBT + Quadtree Pipeline Steps (Lighthouse)", fontsize=16)
+
+            # Row 0: Encoding
+            plot_image(X_orig + 128.0, ax=axes_steps[0, 0])
+            axes_steps[0, 0].set_title("1. Original Image")
+            
+            plot_image(Xp + 128.0, ax=axes_steps[0, 1])
+            axes_steps[0, 1].set_title("2. Pre-filter")
+            
+            # Use power 0.5 to compress dynamic range for frequency plots
+            plot_image(np.abs(Y)**0.5 * 10, ax=axes_steps[0, 2])
+            axes_steps[0, 2].set_title("3. DCT")
+            
+            plot_image(np.abs(Yr)**0.5 * 10, ax=axes_steps[0, 3])
+            axes_steps[0, 3].set_title("4. Regrouped")
+            
+            plot_image(np.abs(Yrq)**0.5 * 10, ax=axes_steps[0, 4])
+            axes_steps[0, 4].set_title("5. Quantized")
+            
+            # 6. Quadtree Map
+            axes_steps[0, 5].imshow(np.abs(Yrq)**0.5 * 10, cmap='gray')
+            axes_steps[0, 5].set_title("6. Quadtree Map")
+            _, blocks = get_qt_structure(Yrq, min_size=4)
+            for (x, y, size) in blocks:
+                rect = patches.Rectangle((x-0.5, y-0.5), size, size, linewidth=0.5, edgecolor='r', facecolor='none', alpha=0.6)
+                axes_steps[0, 5].add_patch(rect)
+            axes_steps[0, 5].axis('off')
+
+            # Row 1: Decoding
+            plot_image(np.abs(Yrq)**0.5 * 10, ax=axes_steps[1, 0])
+            axes_steps[1, 0].set_title("7. Received")
+            
+            plot_image(np.abs(Yr_hat)**0.5 * 10, ax=axes_steps[1, 1])
+            axes_steps[1, 1].set_title("8. Dequantized")
+            
+            plot_image(np.abs(Y_hat)**0.5 * 10, ax=axes_steps[1, 2])
+            axes_steps[1, 2].set_title("9. Inv Regroup")
+            
+            plot_image(Xp_hat + 128.0, ax=axes_steps[1, 3])
+            axes_steps[1, 3].set_title("10. Inv DCT")
+            
+            plot_image(Z_qt + 128.0, ax=axes_steps[1, 4])
+            axes_steps[1, 4].set_title("11. Inv Pre-filter")
+            
+            axes_steps[1, 5].axis('off') # Hide unused subplot
+            
+            plt.tight_layout()
+            plt.show()
+
+        # Apply smoothing filter to a separate variable
+        Z_qt_smooth = gaussian_filter(Z_qt, sigma=0.6)
+        
+        # --- Plotting 1: Main Comparison ---
         fig, axes = plt.subplots(1, 4, figsize=(20, 5))
         fig.suptitle(f"Compression Strategies Comparison on {img_name}", fontsize=16)
         
@@ -288,6 +363,48 @@ def run_experiment():
         
         plt.tight_layout()
         plt.show()
+        
+        # Apply noise to increase definition
+        Z_qt_noise = Z_qt + np.random.normal(0, 3.0, Z_qt.shape)
+        
+        # --- Plotting 2: Post-Processing Comparison ---
+        fig2, axes2 = plt.subplots(1, 3, figsize=(15, 5))
+        fig2.suptitle(f"Post-Processing on Quadtree LBT ({img_name})", fontsize=16)
+        
+        plot_image(Z_qt + 128.0, ax=axes2[0])
+        axes2[0].set_title(f"Raw Quadtree LBT\nRMS: {rms_error(X_orig, Z_qt):.2f} | SSIM: {ssim_score(X_orig, Z_qt):.4f}")
+        
+        plot_image(Z_qt_smooth + 128.0, ax=axes2[1])
+        axes2[1].set_title(f"Smoothed (Gaussian $\sigma=0.6$)\nRMS: {rms_error(X_orig, Z_qt_smooth):.2f} | SSIM: {ssim_score(X_orig, Z_qt_smooth):.4f}")
+        
+        plot_image(Z_qt_noise + 128.0, ax=axes2[2])
+        axes2[2].set_title(f"Added Noise ($\sigma=3.0$)\nRMS: {rms_error(X_orig, Z_qt_noise):.2f} | SSIM: {ssim_score(X_orig, Z_qt_noise):.4f}")
+        
+        plt.tight_layout()
+        plt.show()
 
 if __name__ == "__main__":
     run_experiment()
+
+
+"""
+Viewed reordered_lbt_quadtree.py:87-116
+
+You are absolutely right on both counts! This Quadtree is behaving entirely differently from the classic Spatial Quadtree you likely built earlier in the lab.
+
+Here are the three major differences between a **Spatial Quadtree** and this **Frequency/Transform Quadtree**:
+
+### 1. The Threshold is Absolute Zero (No Variance)
+*   **Spatial Quadtree:** You typically calculate the variance or standard deviation of a block of pixels. If the variance is below a certain threshold (e.g., a slightly textured wall), you say "good enough" and stop splitting.
+*   **Frequency Quadtree (Here):** We are looking at quantized frequency coefficients, not pixels. Our threshold is mathematically absolute: `if np.all(block == 0):`. A block only stops splitting and becomes a single leaf node if **every single coefficient inside it is exactly zero**. 
+
+### 2. We Don't Average the Blocks
+*   **Spatial Quadtree:** Once a block is deemed "flat enough", you throw away the pixels and replace the whole block with the **mean (average) value**.
+*   **Frequency Quadtree (Here):** We do not average anything. 
+    *   If a block is all zeros, we simply record a `0` in the tree structure, and the decoder inherently knows to fill that 16x16 or 32x32 area with zeros. 
+    *   If the block has non-zero values (like the low-frequency DC components at the top left) and bottoms out at `min_size=4`, we **do not average them**. We transmit the exact individual coefficients using entropy coding (`coef_bits += bpp(block) * block.size`). 
+
+### 3. The Purpose of the Tree
+*   **Spatial Quadtree:** Tries to find smooth, boring physical areas of an image (like the sky or a wall) to compress.
+*   **Frequency Quadtree (Here):** Tries to find **"oceans of high-frequency zeros"**. Because we regrouped the LBT matrix, all the high-frequency components are shunted to the bottom right. After quantization, almost all of those high frequencies become exact zeros. The Quadtree is just a highly efficient data structure for saying: *"Hey decoder, the entire bottom-right 128x128 block is completely empty, don't bother reading any coefficients here."*
+"""
