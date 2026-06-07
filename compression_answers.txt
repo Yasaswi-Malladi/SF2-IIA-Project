@@ -1,0 +1,2 @@
+# dct 16x16 rms matched CR: 2.92/ 2.93
+# dwt 4 levels const. step 6.67
