@@ -25,7 +25,21 @@ def load_mat_img(img, img_info, cmap_info={}):
     # check that a .mat filename is provided
     if not img.endswith('.mat'):
         raise ValueError('Please provide a .mat image name.')
-    img_contents = scipy.io.loadmat(img)
+    try:
+        img_contents = scipy.io.loadmat(img)
+    except FileNotFoundError:
+        import os
+        # Try finding in the package folder or parent root folder
+        basename = os.path.basename(img)
+        pkg_dir = os.path.dirname(__file__)
+        pkg_path = os.path.join(pkg_dir, basename)
+        parent_path = os.path.join(os.path.dirname(pkg_dir), basename)
+        if os.path.exists(pkg_path):
+            img_contents = scipy.io.loadmat(pkg_path)
+        elif os.path.exists(parent_path):
+            img_contents = scipy.io.loadmat(parent_path)
+        else:
+            raise
     X = img_contents[img_info]
     cmaps_dict = {}
     for cmap_array in cmap_info:
