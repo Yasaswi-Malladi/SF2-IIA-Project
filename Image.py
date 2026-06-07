@@ -11,6 +11,7 @@ from scipy.optimize import minimize_scalar
 
 class Image():
     image: np.ndarray
+    mean = 128
     _pyramid: np.ndarray
 
     # General
@@ -30,15 +31,67 @@ class Image():
     def bits(self):
             return bpp(self.image)*self.image.size
     
-    def quantise(self, step, apply = True):
+    def quantise(self, step, rise=None, apply = True):
         if apply:
-            self.image = quantise(self.image, step)
+            self.image = quantise(self.image, step, rise1=rise)
         else:
-            return Image(quantise(self.image, step))
+            return Image(quantise(self.image, step, rise1=rise))
 
     def copy(self):
         return Image(self.image.copy()) 
     
+    def lzw_encode(self) -> list[int]:
+        data = self.image.flatten()
+        data = (data+self.mean*np.ones(len(data))).astype(np.uint8)
+        # Initialize dictionary with all single values (0-255)
+        dictionary = {(i,): i for i in range(256)}
+        next_code = 256
+
+        w = ()
+        output = []
+
+        for val in data:
+            wc = w + (int(val),)
+            if wc in dictionary:
+                w = wc
+            else:
+                output.append(dictionary[w])
+                dictionary[wc] = next_code
+                next_code += 1
+                w = (int(val),)
+
+        if w:
+            output.append(dictionary[w])
+
+        return output
+
+
+    def lzw_decode(codes: list[int], dtype=np.uint8) -> np.ndarray:
+        # Initialize dictionary with single values
+        dictionary = {i: (i,) for i in range(256)}
+        next_code = 256
+
+        result = []
+        w = dictionary[codes[0]]
+        result.extend(w)
+
+        for code in codes[1:]:
+            if code in dictionary:
+                entry = dictionary[code]
+            elif code == next_code:
+                entry = w + (w[0],)  # Special case
+            else:
+                raise ValueError(f"Bad code: {code}")
+
+            result.extend(entry)
+            dictionary[next_code] = w + (entry[0],)
+            next_code += 1
+            w = entry
+
+        return np.array(result, dtype=dtype)
+
+    
+
     # Plotting
     def plot_examples(images):
         fig, ax = plt.subplots(1, 5)
@@ -50,218 +103,195 @@ class Image():
         plot_image(self.image, ax = ax)
         plt.show()
     
-    # Pyramid
-    def pyramid(self, h, n, apply=True):
-        x = [np.copy(self.image)]
-        p = []
-        for i in range(0, n):
-            x.append(rowdec(rowdec(x[i], h).T, h).T )
-            p.append(x[i] - rowint(rowint(x[i+1], 2*h).T,2*h).T)
-        p.append(x[-1])
-        p = [x for x in p]
-        if apply:
-            self._pyramid = p
-        else:
-            return p
+    def histogram(self):
+        counts, bins = np.histogram(self.image, bins=256)
+        plt.stairs(counts, bins)
+        plt.show()
 
-    def ipyramid(self, h, apply=True):
-        a = [x for x in self._pyramid]
-        for i in range(len(self._pyramid)-1, 0, -1):
-            a[i-1] = a[i-1] + rowint(rowint(a[i], 2*h).T,2*h).T
+    # # Pyramid
+    # def pyramid(self, h, n, apply=True):
+    #     x = [np.copy(self.image)]
+    #     p = []
+    #     for i in range(0, n):
+    #         x.append(rowdec(rowdec(x[i], h).T, h).T )
+    #         p.append(x[i] - rowint(rowint(x[i+1], 2*h).T,2*h).T)
+    #     p.append(x[-1])
+    #     p = [x for x in p]
+    #     if apply:
+    #         self._pyramid = p
+    #     else:
+    #         return p
+
+    # def ipyramid(self, h, apply=True):
+    #     a = [x for x in self._pyramid]
+    #     for i in range(len(self._pyramid)-1, 0, -1):
+    #         a[i-1] = a[i-1] + rowint(rowint(a[i], 2*h).T,2*h).T
         
-        if apply:
-            self.image = a[0]
-        else:
-            return a[0]
+    #     if apply:
+    #         self.image = a[0]
+    #     else:
+    #         return a[0]
         
-    def MSE_pyramid(h, n, N=256):
-        z = Image(np.zeros((N, N)))
-        z.pyramid(h, n)
-        e = []
-        for i in range(0, n+1):
-            impulse = Pyramid(z._pyramid).copy()
-            layer = impulse._pyramid[i]
-            H, W = layer.shape
-            layer[H//2, W//2] = 100
-            e.append(z.rms(impulse.ipyramid(h, False))) #rms -> sqrt mse
+    # def MSE_pyramid(h, n, N=256):
+    #     z = Image(np.zeros((N, N)))
+    #     z.pyramid(h, n)
+    #     e = []
+    #     for i in range(0, n+1):
+    #         impulse = Pyramid(z._pyramid).copy()
+    #         layer = impulse._pyramid[i]
+    #         H, W = layer.shape
+    #         layer[H//2, W//2] = 100
+    #         e.append(z.rms(impulse.ipyramid(h, False))) #rms -> sqrt mse
         
-        e = [1/x for x in e]
-        e = [x/e[0] for x in e]
-        return e
+    #     e = [1/x for x in e]
+    #     e = [x/e[0] for x in e]
+    #     return e
     
-    def bits_pyramid(self):
-        bits = [bpp(x)*x.size for x in self._pyramid]
-        return np.sum(bits)    
+    # def bits_pyramid(self):
+    #     bits = [bpp(x)*x.size for x in self._pyramid]
+    #     return np.sum(bits)    
 
-    def comp_ratio_pyramid(self, h, n, step):
-        reference = Image(quantise(self.image, step))
-        reference_rms = reference.rms(self.image)
-        p = self.pyramid(h, n, False)
-        def _pyramid_optimisation_func(step):
-            Z = Pyramid(p)
-            Z.quantise_pyramid([step]*(n+1))
-            Z.ipyramid(h)
-            return abs(Z.rms(self.image) - reference_rms)
+    # def comp_ratio_pyramid(self, h, n, step):
+    #     reference = Image(quantise(self.image, step))
+    #     reference_rms = reference.rms(self.image)
+    #     p = self.pyramid(h, n, False)
+    #     def _pyramid_optimisation_func(step):
+    #         Z = Pyramid(p)
+    #         Z.quantise_pyramid([step]*(n+1))
+    #         Z.ipyramid(h)
+    #         return abs(Z.rms(self.image) - reference_rms)
             
-        opt_step = minimize_scalar(_pyramid_optimisation_func, bounds=(0, 255), method='bounded').x
-        bits_ref = reference.bits()
-        Z = Pyramid(p)
-        Z.quantise_pyramid([opt_step]*(n+1))
-        bits_scheme = Z.bits_pyramid()
-        comp_ratio = bits_ref / bits_scheme
-        return (opt_step, comp_ratio)
+    #     opt_step = minimize_scalar(_pyramid_optimisation_func, bounds=(0, 255), method='bounded').x
+    #     bits_ref = reference.bits()
+    #     Z = Pyramid(p)
+    #     Z.quantise_pyramid([opt_step]*(n+1))
+    #     bits_scheme = Z.bits_pyramid()
+    #     comp_ratio = bits_ref / bits_scheme
+    #     return (opt_step, comp_ratio)
 
-    def comp_ratio_pyramid_mse(self, h, n, step):
-        reference = Image(quantise(self.image, step))
-        reference_rms = reference.rms(self.image)
-        p = self.pyramid(h, n, False)
-        mse_ratio = np.array(Image.MSE_pyramid(h, n, len(self.image)))
-        def _pyramid_optimisation_func(step):
-            Z = Pyramid(p)
-            Z.quantise_pyramid(mse_ratio*step)
-            Z.ipyramid(h)
-            return abs(Z.rms(self.image) - reference_rms)
+    # def comp_ratio_pyramid_mse(self, h, n, step):
+    #     reference = Image(quantise(self.image, step))
+    #     reference_rms = reference.rms(self.image)
+    #     p = self.pyramid(h, n, False)
+    #     mse_ratio = np.array(Image.MSE_pyramid(h, n, len(self.image)))
+    #     def _pyramid_optimisation_func(step):
+    #         Z = Pyramid(p)
+    #         Z.quantise_pyramid(mse_ratio*step)
+    #         Z.ipyramid(h)
+    #         return abs(Z.rms(self.image) - reference_rms)
             
-        opt_step = minimize_scalar(_pyramid_optimisation_func, bounds=(0, 255), method='bounded').x
-        bits_ref = reference.bits()
-        Z = Pyramid(p)
-        Z.quantise_pyramid([opt_step]*(n+1))
-        bits_scheme = Z.bits_pyramid()
-        comp_ratio = bits_ref / bits_scheme
-        return (opt_step, comp_ratio)
+    #     opt_step = minimize_scalar(_pyramid_optimisation_func, bounds=(0, 255), method='bounded').x
+    #     bits_ref = reference.bits()
+    #     Z = Pyramid(p)
+    #     Z.quantise_pyramid([opt_step]*(n+1))
+    #     bits_scheme = Z.bits_pyramid()
+    #     comp_ratio = bits_ref / bits_scheme
+    #     return (opt_step, comp_ratio)
 
-    def quantise_pyramid(self, l, apply = True):
-        a = [0]*len(self._pyramid)
-        for i in range(0, len(l)):
-            a[i] = quantise(self._pyramid[i], l[i])
-        if apply:
-            self._pyramid = a
-        else:
-            return a  
+    # def quantise_pyramid(self, l, apply = True):
+    #     a = [0]*len(self._pyramid)
+    #     for i in range(0, len(l)):
+    #         a[i] = quantise(self._pyramid[i], l[i])
+    #     if apply:
+    #         self._pyramid = a
+    #     else:
+    #         return a  
 
-    # DCT
-    def DCT(self, N, apply=True):
-        c = dct_ii(N)
-        if apply:
-            self.image = colxfm(colxfm(self.image,c).T,c).T
-        else:
-            return Image(colxfm(colxfm(self.image,c).T,c).T)
+    # # DCT
+    # def DCT(self, N, apply=True):
+    #     c = dct_ii(N)
+    #     if apply:
+    #         self.image = colxfm(colxfm(self.image,c).T,c).T
+    #     else:
+    #         return Image(colxfm(colxfm(self.image,c).T,c).T)
 
-    def iDCT(self, N, apply=True):
-        c = dct_ii(N)
-        if apply:
-            self.image = colxfm(colxfm(self.image.T,c.T).T,c.T)
-        else:
-            return Image(colxfm(colxfm(self.image.T,c.T).T,c.T))
+    # def iDCT(self, N, apply=True):
+    #     c = dct_ii(N)
+    #     if apply:
+    #         self.image = colxfm(colxfm(self.image.T,c.T).T,c.T)
+    #     else:
+    #         return Image(colxfm(colxfm(self.image.T,c.T).T,c.T))
         
-    def bits_dct(self, N):
-        w = len(self.image) // N
-        bits = 0
-        for y in range(0, w*N, w):
-            for x in range(0, w*N, w):
-                Y = self.image[x: x+w, y: y+w]
-                bits += bpp(Y) * Y.size
-        return bits
-        # def recursive
+    # def bits_dct(self, N):
+    #     w = len(self.image) // N
+    #     bits = 0
+    #     for y in range(0, w*N, w):
+    #         for x in range(0, w*N, w):
+    #             Y = self.image[x: x+w, y: y+w]
+    #             bits += bpp(Y) * Y.size
+    #     return bits
+    #     # def recursive
     
-    def regroup_N(self, N):
-        return regroup(self.image, N)/N
+    # def regroup_N(self, N):
+    #     return regroup(self.image, N)/N
 
-    def regroup(self, N, apply = True):
-        if apply:
-            self.image = regroup(self.image, N)
-        else:
-            return Image(regroup(self.image, N))
+    # def regroup(self, N, apply = True):
+    #     if apply:
+    #         self.image = regroup(self.image, N)
+    #     else:
+    #         return Image(regroup(self.image, N))
     
-    def comp_ratio_dct(self, N: int, step :float):
-        reference = Image(quantise(self.image, step))
-        reference_rms = reference.rms(self.image)
+    # def comp_ratio_dct(self, N: int, step :float):
+    #     reference = Image(quantise(self.image, step))
+    #     reference_rms = reference.rms(self.image)
         
-        def _DCT_optimisation_func(step):
-            return abs(reference_rms - self.DCT(N, False).quantise(step, False).iDCT(N, False).rms(self.image))
+    #     def _DCT_optimisation_func(step):
+    #         return abs(reference_rms - self.DCT(N, False).quantise(step, False).iDCT(N, False).rms(self.image))
         
-        opt_step = minimize_scalar(_DCT_optimisation_func, bounds=(0, 255), method='bounded').x
-        bits_ref = reference.bits()
-        bits_scheme = self.DCT(N, False).quantise(opt_step, False).regroup(N, False).bits_dct(N)
-        comp_ratio = bits_ref / bits_scheme
+    #     opt_step = minimize_scalar(_DCT_optimisation_func, bounds=(0, 255), method='bounded').x
+    #     bits_ref = reference.bits()
+    #     bits_scheme = self.DCT(N, False).quantise(opt_step, False).regroup(N, False).bits_dct(N)
+    #     comp_ratio = bits_ref / bits_scheme
 
-        return (opt_step, comp_ratio)
+    #     return (opt_step, comp_ratio)
 
-    # POT / LBT
-    def POT(self, N,s=(1 + (5 ** 0.5)) / 2, apply=True):
-        Pf = pot_ii(N, s)[0]
-        t = np.s_[N//2:-N//2]  # N is the DCT size, I is the image size
-        Xp = self.image.copy()  # copy the non-transformed edges directly from X
-        Xp[t,:] = colxfm(Xp[t,:], Pf)
-        Xp[:,t] = colxfm(Xp[:,t].T, Pf).T
-        c = dct_ii(N)
-        if apply:
-            self.image = colxfm(colxfm(Xp,c).T,c).T
-        else:
-            return Image(colxfm(colxfm(Xp,c).T,c).T)
+    # # POT / LBT
+    # def POT(self, N,s=(1 + (5 ** 0.5)) / 2, apply=True):
+    #     Pf = pot_ii(N, s)[0]
+    #     t = np.s_[N//2:-N//2]  # N is the DCT size, I is the image size
+    #     Xp = self.image.copy()  # copy the non-transformed edges directly from X
+    #     Xp[t,:] = colxfm(Xp[t,:], Pf)
+    #     Xp[:,t] = colxfm(Xp[:,t].T, Pf).T
+    #     c = dct_ii(N)
+    #     if apply:
+    #         self.image = colxfm(colxfm(Xp,c).T,c).T
+    #     else:
+    #         return Image(colxfm(colxfm(Xp,c).T,c).T)
         
-    def iPOT(self, N,s=(1 + (5 ** 0.5)) / 2, apply=True):
-        Pr = pot_ii(N, s)[1]
-        t = np.s_[N//2:-N//2] 
-        c = dct_ii(N)
-        Zp = colxfm(colxfm(self.image.T,c.T).T,c.T) #iDCT
-        Zp[:,t] = colxfm(Zp[:,t].T, Pr.T).T
-        Zp[t,:] = colxfm(Zp[t,:], Pr.T)
-        if apply:
-            self.image = Zp
-        else:
-            return Image(Zp)
+    # def iPOT(self, N,s=(1 + (5 ** 0.5)) / 2, apply=True):
+    #     Pr = pot_ii(N, s)[1]
+    #     t = np.s_[N//2:-N//2] 
+    #     c = dct_ii(N)
+    #     Zp = colxfm(colxfm(self.image.T,c.T).T,c.T) #iDCT
+    #     Zp[:,t] = colxfm(Zp[:,t].T, Pr.T).T
+    #     Zp[t,:] = colxfm(Zp[t,:], Pr.T)
+    #     if apply:
+    #         self.image = Zp
+    #     else:
+    #         return Image(Zp)
     
-    def comp_ratio_lbt(self,N:int,s:float,  step: float):
-        reference = Image(quantise(self.image, step))
-        reference_rms = reference.rms(self.image)
+    # def comp_ratio_lbt(self,N:int,s:float,  step: float):
+    #     reference = Image(quantise(self.image, step))
+    #     reference_rms = reference.rms(self.image)
         
-        def _POT_optimisation_func(step):
-            return abs(reference_rms - self.POT(N,s, False).quantise(step, False).iPOT(N,s, False).rms(self.image))
+    #     def _POT_optimisation_func(step):
+    #         return abs(reference_rms - self.POT(N,s, False).quantise(step, False).iPOT(N,s, False).rms(self.image))
         
-        opt_step = minimize_scalar(_POT_optimisation_func, bounds=(0, 255), method='bounded').x
-        bits_ref = reference.bits()
-        bits_scheme = self.POT(N,s, False).quantise(opt_step, False).regroup(N, False).bits_dct(N)
-        comp_ratio = bits_ref / bits_scheme
+    #     opt_step = minimize_scalar(_POT_optimisation_func, bounds=(0, 255), method='bounded').x
+    #     bits_ref = reference.bits()
+    #     bits_scheme = self.POT(N,s, False).quantise(opt_step, False).regroup(N, False).bits_dct(N)
+    #     comp_ratio = bits_ref / bits_scheme
 
-        return (opt_step, comp_ratio)
+    #     return (opt_step, comp_ratio)
 
     # DWT
-    def DWT_example(self, h1 = [-1/8, 2/8, 6/8, 2/8, -1/8], h2= [-1/4, 2/4, -1/4], apply=True):
-        U = rowdec(self.image, h1)
-        V = rowdec2(self.image, h2)
-        UU = rowdec(U.T, h1).T
-        UV = rowdec2(U.T, h2).T
-        VU = rowdec(V.T, h1).T
-        VV = rowdec2(V.T, h2).T
-        image = np.block([[UU, UV], [VU, VV]])
-        if apply:
-            self.image = image
-        else:
-            return Image(image)
-        
-    def iDWT_example(self, g1=[1/2, 1, 1/2], g2=[-1/4, -2/4, 6/4, -2/4, -1/4], apply=True):
-        top, bottom = np.vsplit(self.image, 2)
-        UU, UV = (arr.copy() for arr in np.hsplit(top, 2))
-        VU, VV = (arr.copy() for arr in np.hsplit(bottom, 2))
-        Ur = rowint(UU.T, g1).T + rowint2(UV.T, g2).T
-        Vr = rowint(VU.T, g1).T + rowint2(VV.T, g2).T
-        Xr = rowint(Ur,g1) + rowint2(Vr,g2)
-        if apply:
-            self.image = Xr
-        else:
-            return Image(Xr)
-    
-    def DWT(self, h1 = [-1/8, 2/8, 6/8, 2/8, -1/8], h2= [-1/4, 2/4, -1/4], l = 1, apply=True):
+    def DWT(self, h1 = [-1/8, 2/8, 6/8, 2/8, -1/8], h2= [-1/4, 2/4, -1/4], l = 1):
         m = len(self.image)
         Y = dwt(self.image)
         for i in range(1, l):
             m = m//2
             Y[:m,:m] = dwt(Y[:m,:m], h1, h2)
-        if apply:
-            self.image = Y
-        else:
-            return Image(Y)
+        return DWT(Y)
     
     def iDWT(self, g1=[1/2, 1, 1/2], g2=[-1/4, -2/4, 6/4, -2/4, -1/4], l=1, apply=True):
         m = len(self.image) // pow(2, l-1)
@@ -272,12 +302,10 @@ class Image():
             m = len(self.image) // pow(2, i)
             Y = idwt(X[:m, :m], g1, g2)
             X[:m, :m] = Y
-        if apply:
-            self.image = X
-        else:
-            return Image(X)
-        
-    def MSE_dwt(h1=[-1/8, 2/8, 6/8, 2/8, -1/8], h2=[-1/4, 2/4, -1/4],g1 = [1/2, 1, 1/2], g2 = [-1/4, -2/4, 6/4, -2/4, -1/4],l=1, N=256):   
+        return Image(X)
+
+class DWT(Image):
+    def MSE(h1=[-1/8, 2/8, 6/8, 2/8, -1/8], h2=[-1/4, 2/4, -1/4],g1 = [1/2, 1, 1/2], g2 = [-1/4, -2/4, 6/4, -2/4, -1/4],l=1, N=256):  
         e = np.full((3, l+1), np.inf)
         
         for level in range(l):
@@ -290,21 +318,30 @@ class Image():
             
             for k, (cy, cx) in enumerate(quadrant_centres):
                 impulse = Image(np.zeros((N, N)))
-                impulse.DWT(h1, h2, l=level+1)
+                impulse = impulse.DWT(h1, h2, l=level+1)
                 impulse.image[cy, cx] = 100
-                impulse.iDWT(g1, g2, l=level+1)
+                impulse = impulse.iDWT(g1, g2, l=level+1)
                 e[k, level] = np.sqrt(np.mean(impulse.image**2))
+        
         m = N // pow(2, l)
         impulse = Image(np.zeros((N, N)))
-        impulse.DWT(h1, h2, l=l)
+        impulse = impulse.DWT(h1, h2, l=l)
         impulse.image[m//2, m//2] = 100
-        impulse.iDWT(g1, g2, l=l)
+        impulse = impulse.iDWT(g1, g2, l=l)
         e[0, l] = np.sqrt(np.mean(impulse.image**2))
         
         e = e / e.min()
         return 1 / e
+
+    def copy(self):
+        return DWT(self.image.copy()) 
     
-    def quantise_dwt(self, M, l=1, apply=True):
+    def plot(self):
+        fig, ax = plt.subplots()
+        plot_image(self.image, ax = ax)
+        plt.show()
+    
+    def quantise(self, M, l=1):
         im = self.copy().image
         for i in range(0, l):
             m = len(self.image) // pow(2, i+1)
@@ -314,12 +351,9 @@ class Image():
 
         m = len(self.image) // pow(2, l)
         im[:m, :m] = quantise(im[:m, :m], M[0, l])
-        if apply:
-            self.image = im
-        else:
-            return Image(im)
+        return DWT(im)
 
-    def bits_dwt(self, l=1):
+    def bits(self, l=1):
         def _split(arr, l):
             if l <= 1:
                 return [half for row in np.vsplit(arr, 2) for half in np.hsplit(row, 2)]
@@ -334,53 +368,29 @@ class Image():
             bits += bpp(Y) * Y.size
         return bits
 
-    def comp_ratio_dwt(self,h1=[-1/8, 2/8, 6/8, 2/8, -1/8], h2=[-1/4, 2/4, -1/4],g1 = [1/2, 1, 1/2], g2 = [-1/4, -2/4, 6/4, -2/4, -1/4],l=1, step=17):
+    def comp_ratio(self,mse = True, h1=[-1/8, 2/8, 6/8, 2/8, -1/8], h2=[-1/4, 2/4, -1/4],g1 = [1/2, 1, 1/2], g2 = [-1/4, -2/4, 6/4, -2/4, -1/4],l=1, step=17):
         reference = Image(quantise(self.image, step))
         reference_rms = reference.rms(self.image)
-        # print(f"reference {reference_rms}")
         
         def _dwt_optimisation_func(step):
             Z = Image(self.image)
-            Z.DWT(h1, h2, l)
-            Z.quantise_dwt(np.ones((3, l+1))*step, l)
-            Z.iDWT(g1, g2, l)
-            # Z.plot()
-            # print(step, abs(Z.rms(self.image) - reference_rms))
-            # print(Z.rms(self.image))
+            Z = Z.DWT(h1, h2, l)
+            Z = Z.quantise(step_ratio*step, l)
+            Z = Z.iDWT(g1, g2, l)
             return abs(Z.rms(self.image) - reference_rms)
-            
-        # opt_step = minimize_scalar(_dwt_optimisation_func, bounds=(0, 255), method='bounded', ).x
-        opt_step = minimize_scalar(_dwt_optimisation_func, bracket=(0, 255),  method='golden', tol=0.001).x
-        # print(f"optimal step: {opt_step}")
-        bits_ref = reference.bits()
-        Z = Image(self.image)
-        Z.DWT(h1, h2, l)
-        Z.quantise_dwt(np.ones((3, l+1))*opt_step, l)
-        bits_scheme = Z.bits_dwt(l=l)
-        # Z.iDWT(g1, g2, l)
-        # print("inside rms", Z.rms(self.image))
-        comp_ratio = bits_ref / bits_scheme
-        return (opt_step, comp_ratio)
-    
-    def comp_ratio_dwt_mse(self,h1=[-1/8, 2/8, 6/8, 2/8, -1/8], h2=[-1/4, 2/4, -1/4],g1 = [1/2, 1, 1/2], g2 = [-1/4, -2/4, 6/4, -2/4, -1/4],l=1, step=17):
-        reference = Image(quantise(self.image, step))
-        reference_rms = reference.rms(self.image)
-        mse_ratio = np.array(Image.MSE_dwt(h1, h2, g1, g2, l=l))
         
-        def _dwt_optimisation_func(step):
-            Z = Image(self.image)
-            Z.DWT(h1, h2, l)
-            Z.quantise_dwt(mse_ratio*step, l)
-            Z.iDWT(g1, g2, l)
-            return abs(Z.rms(self.image) - reference_rms)
+        if mse:
+            step_ratio = np.array(DWT.MSE(h1, h2, g1, g2, l=l))
+        else:
+            step_ratio = np.ones((3, l+1))
         
         opt_step = minimize_scalar(_dwt_optimisation_func, bracket=(0, 255),  method='golden', tol=0.001).x
         bits_ref = reference.bits()
         Z = Image(self.image)
-        Z.DWT(h1, h2, l)
-        M = mse_ratio*opt_step
-        Z.quantise_dwt(M, l)
-        bits_scheme = Z.bits_dwt(l=l)
+        Z = Z.DWT(h1, h2, l)
+        M = step_ratio*opt_step
+        Z = Z.quantise(step_ratio*opt_step, l)
+        bits_scheme = Z.bits(l=l)
         comp_ratio = bits_ref / bits_scheme
         return (M, comp_ratio)
 
@@ -392,12 +402,18 @@ class Pyramid(Image):
         p = [im.copy() for im in self._pyramid]
         return Pyramid(p)
 
-# lighthouse=load_mat_img(img='lighthouse.mat', img_info='X', cmap_info={'map', 'map2'})[0]- 128.0
-# im = Image(lighthouse)
-# print(im.bits())
-# im.DWT(l=2)
-# print(im.bits_dwt(2))
+lighthouse=load_mat_img(img='lighthouse.mat', img_info='X', cmap_info={'map', 'map2'})[0]- 128.0
+bridge=load_mat_img(img='bridge.mat', img_info='X', cmap_info={'map'})[0]-128.0
 
+im = Image(lighthouse)
+print(im.image.size)
+lzw_compressed = im.lzw_encode()
+print(len(lzw_compressed))
+# mse = DWT.MSE(l=3)
+# im_dwt = im.DWT(l=3)
+# im_dwt.plot()
+# im_restored = im_dwt.iDWT(l=3)
+# im_restored.plot()
 
 # dct 16x16 rms matched CR: 2.92/ 2.93
 # dwt 4 levels const. step 6.67
