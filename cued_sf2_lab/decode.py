@@ -7,10 +7,9 @@ from scipy.ndimage import gaussian_filter
 from .common import HeaderType
 
 def deadzone_dequant(xq, step):
-    # Reconstruct to the center of the quantization bin to minimize error!
-    # For a deadzone quantizer floor(abs(x)/step), a value xq=1 covers [step, 2*step).
-    # The midpoint is (xq + 0.5) * step. np.sign(0) handles the zero case perfectly.
-    return xq * step + np.sign(xq) * (step * 0.5)
+    # Reverting to lower-edge reconstruction because AC coefficients are Laplacian distributed, 
+    # meaning they are heavily clustered near the lower edge of the bin!
+    return xq * step
 
 def decode(vlc: np.ndarray, header: HeaderType) -> np.ndarray:
     """
@@ -42,4 +41,5 @@ def decode(vlc: np.ndarray, header: HeaderType) -> np.ndarray:
     X_hat[:, t] = colxfm(X_hat[:, t].T, Pr.T).T
     X_hat[t, :] = colxfm(X_hat[t, :], Pr.T)
     
-    return X_hat
+    # Add back the DC offset
+    return X_hat + 128.0
