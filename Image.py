@@ -47,7 +47,7 @@ class Image():
     def copy(self):
         return Image(self.image.copy()) 
     
-    def quantise_exponential(self, r: int, k:int, mode="linear"):
+    def quantise_exponential(self, k:int,r: int,  mode="linear"):
         i = np.arange(30)
         differences = np.round(4 + (k - 4) * r**i)       # tends to 4 as i -> inf
         levels = np.concatenate([-np.cumsum(differences)[::-1],[0], np.cumsum(differences)])   # s2[i+1] - s2[i] = s1[i]
@@ -119,10 +119,12 @@ class Image():
         plot_image(self.image, ax = ax)
         plt.show()
 
-    def plot_histogram(self):
+    def plot_histogram(self, plot = True):
         counts, bins = np.histogram(self.image, bins=256)
-        plt.stairs(counts, bins)
-        plt.show()
+        if plot:
+            plt.stairs(counts, bins)
+            plt.show()
+        return counts, bins
   
     # DWT
     def DWT(self, h1 = [-1/8, 2/8, 6/8, 2/8, -1/8], h2= [-1/4, 2/4, -1/4], l = 1):
@@ -237,12 +239,12 @@ class DWT(Image):
 lighthouse=load_mat_img(img='lighthouse.mat', img_info='X', cmap_info={'map', 'map2'})[0]-128.0
 bridge=load_mat_img(img='bridge.mat', img_info='X', cmap_info={'map'})[0]-128.0
 
-im = Image(lighthouse)
-print(im.quantise(17).bits())
-print(im.quantise(17).rms(im))
+# im = Image(lighthouse)
+# print(im.quantise(17).bits())
+# print(im.quantise(17).rms(im))
 
-exp_quantised = im.quantise_exponential(r = 0.2, k= 25)
-print(exp_quantised.bits())
-print(exp_quantised.rms(im))
-exp_quantised.plot()
-exp_quantised.plot_histogram()
+# exp_quantised = im.quantise_exponential(r = 0.2, k= 25)
+# print(exp_quantised.bits())
+# print(exp_quantised.rms(im))
+# exp_quantised.plot()
+# exp_quantised.plot_histogram()
