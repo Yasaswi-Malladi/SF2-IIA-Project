@@ -43,11 +43,13 @@ def encode(X: np.ndarray) -> Tuple[np.ndarray, HeaderType]:
         vlc: the variable-length codes
         header: any additional parameters to be saved alongside the image
     """
+    # Zero-center the image (CRITICAL for DCT efficiency)
+    Xp = X.astype(np.float64) - 128.0
+
     # 1. LBT Pre-filter
     s = (1 + 5**0.5) / 2
     Pf, Pr = pot_ii(8, s)
     t = np.s_[4:-4]
-    Xp = X.copy()
     Xp[t, :] = colxfm(Xp[t, :], Pf)
     Xp[:, t] = colxfm(Xp[:, t].T, Pf).T
     
@@ -71,7 +73,7 @@ def encode(X: np.ndarray) -> Tuple[np.ndarray, HeaderType]:
         return len(tree_bits) + coef_bits, Yrq
         
     # Bisection search to hit exactly 40000 bits
-    lo, hi = 0.1, 200.0
+    lo, hi = 0.1, 1000.0
     for _ in range(30):
         mid = (lo + hi) / 2
         bits, _ = simulate(mid)
