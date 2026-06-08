@@ -5,7 +5,7 @@ from cued_sf2_lab.dct import dct_ii, colxfm, regroup
 from cued_sf2_lab.lbt import pot_ii
 from cued_sf2_lab.laplacian_pyramid import bpp
 
-from .common import HeaderType
+from common import HeaderType
 
 def deadzone_quant(x, step):
     return np.sign(x) * np.floor(np.abs(x) / step)

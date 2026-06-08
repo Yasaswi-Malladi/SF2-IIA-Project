@@ -4,7 +4,7 @@ from cued_sf2_lab.dct import dct_ii, colxfm, regroup
 from cued_sf2_lab.lbt import pot_ii
 from scipy.ndimage import gaussian_filter
 
-from .common import HeaderType
+from common import HeaderType
 
 def deadzone_dequant(xq, step):
     # Reverting to lower-edge reconstruction because AC coefficients are Laplacian distributed, 
